@@ -7,7 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"runtime"
+	"os"
 	"strings"
 	"testing"
 )
@@ -52,33 +52,28 @@ func buffer[T io.WriteCloser](t testing.TB, data []byte, fn func(w io.Writer) T)
 	return buf.Bytes()
 }
 
+// fakeUpload is a stand-in for a method we cannot change
+// it requires an io.Reader so we cannot just io.Copy to it.
+func fakeUpload(r io.Reader) error {
+	_, err := io.Copy(os.Stdout, r)
+	return err
+}
+
 func BenchmarkStream(b *testing.B) {
 	r := io.LimitReader(rand.Reader, 1024*1024*10)
 
-	cr := New(r, gzip.NewWriter)
-
 	b.Run("stream", func(b *testing.B) {
-		var m runtime.MemStats
-		runtime.ReadMemStats(&m)
-		before := m.TotalAlloc
-
-		io.Copy(io.Discard, cr)
-
-		runtime.ReadMemStats(&m)
-		fmt.Println(m.TotalAlloc - before)
+		fakeUpload(New(r, hex.Dumper))
 	})
 
 	b.Run("buffer", func(b *testing.B) {
-		var m runtime.MemStats
-		runtime.ReadMemStats(&m)
-		before := m.TotalAlloc
+		var buf bytes.Buffer
 
-		w := gzip.NewWriter(io.Discard)
+		w := hex.Dumper(&buf)
 		io.Copy(w, r)
 		w.Close()
 
-		runtime.ReadMemStats(&m)
-		fmt.Println(m.TotalAlloc - before)
+		fakeUpload(&buf)
 	})
 }
 
