@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -109,6 +110,30 @@ func TestGzip(t *testing.T) {
 				t.Errorf("buffers do not match:\n%q\n!=\n%q", hex.EncodeToString(expected), hex.EncodeToString(actual))
 			}
 		})
+	}
+}
+
+var errClosed = errors.New("closed")
+
+type errReader struct {
+	io.Reader
+	count int
+}
+
+func (e *errReader) Read(p []byte) (int, error) {
+	e.count -= 1
+	if e.count < 0 {
+		return 0, errClosed
+	}
+	return e.Reader.Read(p)
+}
+
+func TestErrCloser(t *testing.T) {
+	r := &errReader{Reader: rand.Reader, count: 10}
+
+	_, err := io.Copy(io.Discard, New(r, hex.Dumper))
+	if err != errClosed {
+		t.Errorf("expected errClosed, got %+v", err)
 	}
 }
 
