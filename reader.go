@@ -61,3 +61,17 @@ func New[T io.WriteCloser](r io.Reader, fn func(w io.Writer) T) io.ReadCloser {
 	cr.writer = fn(cr)
 	return cr
 }
+
+type noopCloser struct {
+	io.Writer
+}
+
+func (noopCloser) Close() error {
+	return nil
+}
+
+func WriteCloser[T io.Writer](fn func(w io.Writer) T) func(io.Writer) io.WriteCloser {
+	return func(w io.Writer) io.WriteCloser {
+		return noopCloser{fn(w)}
+	}
+}
