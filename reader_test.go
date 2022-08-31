@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"github.com/simon-engledew/pipereader"
 	"io"
-	"os"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -58,7 +57,7 @@ func buffer[T io.WriteCloser](t testing.TB, data []byte, fn func(w io.Writer) T)
 // fakeUpload is a stand-in for a method we cannot change
 // it requires an io.Reader so we cannot just io.Copy to it.
 func fakeUpload(r io.Reader) error {
-	_, err := io.Copy(os.Stdout, r)
+	_, err := io.Copy(io.Discard, r)
 	return err
 }
 
