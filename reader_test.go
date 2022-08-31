@@ -138,7 +138,7 @@ func TestReader(t *testing.T) {
 func TestHalfReader(t *testing.T) {
 	r := iotest.HalfReader(io.LimitReader(rand.Reader, 1024*1024*10))
 
-	cr := pipereader.New(r, pipereader.WriteCloser(bufio.NewWriter))
+	cr := pipereader.New(r, bufio.NewWriter)
 
 	var buf bytes.Buffer
 

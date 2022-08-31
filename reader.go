@@ -1,3 +1,4 @@
+// Package pipereader provides a reader that transforms its input through a writer without using a goroutine.
 package pipereader
 
 import (
@@ -6,9 +7,9 @@ import (
 	"io"
 )
 
-type pipeReader[T io.WriteCloser] struct {
+type pipeReader struct {
 	reader io.Reader
-	writer T
+	writer io.Writer
 	buf    bytes.Buffer
 	drain  bool
 }
@@ -22,7 +23,7 @@ func push(w io.Writer, r io.Reader, b []byte) error {
 	return ew
 }
 
-func (cr *pipeReader[T]) Read(b []byte) (n int, err error) {
+func (cr *pipeReader) Read(b []byte) (n int, err error) {
 	for {
 		n, err = cr.buf.Read(b)
 		if !cr.drain && err == io.EOF {
@@ -31,7 +32,7 @@ func (cr *pipeReader[T]) Read(b []byte) (n int, err error) {
 				cr.drain = true
 			}
 			if err != nil {
-				closeErr := cr.writer.Close()
+				closeErr := cr.Close()
 				if err == io.EOF {
 					err = closeErr
 				}
@@ -45,33 +46,22 @@ func (cr *pipeReader[T]) Read(b []byte) (n int, err error) {
 	}
 }
 
-func (cr *pipeReader[T]) Write(b []byte) (int, error) {
+func (cr *pipeReader) Write(b []byte) (int, error) {
 	return cr.buf.Write(b)
 }
 
-func (cr *pipeReader[T]) Close() error {
-	return cr.writer.Close()
+func (cr *pipeReader) Close() error {
+	if wc, ok := cr.writer.(io.WriteCloser); ok {
+		return wc.Close()
+	}
+	return nil
 }
 
 // New returns a reader that will pass all the data read from r through the writer returned by fn.
-func New[T io.WriteCloser](r io.Reader, fn func(w io.Writer) T) io.ReadCloser {
-	cr := &pipeReader[T]{
+func New[T io.Writer](r io.Reader, fn func(w io.Writer) T) io.ReadCloser {
+	cr := &pipeReader{
 		reader: r,
 	}
 	cr.writer = fn(cr)
 	return cr
-}
-
-type noopCloser struct {
-	io.Writer
-}
-
-func (noopCloser) Close() error {
-	return nil
-}
-
-func WriteCloser[T io.Writer](fn func(w io.Writer) T) func(io.Writer) io.WriteCloser {
-	return func(w io.Writer) io.WriteCloser {
-		return noopCloser{fn(w)}
-	}
 }
