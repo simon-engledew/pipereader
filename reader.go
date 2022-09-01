@@ -51,7 +51,7 @@ func (cr *pipeReader) Write(b []byte) (int, error) {
 }
 
 func (cr *pipeReader) Close() error {
-	if wc, ok := cr.writer.(io.WriteCloser); ok {
+	if wc, ok := cr.writer.(io.WriteCloser); cr.writer != cr && ok {
 		return wc.Close()
 	}
 	return nil

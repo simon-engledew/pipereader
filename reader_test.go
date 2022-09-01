@@ -1,7 +1,6 @@
 package pipereader_test
 
 import (
-	"bufio"
 	"bytes"
 	"compress/gzip"
 	"crypto/rand"
@@ -21,37 +20,32 @@ func FuzzMatches(f *testing.F) {
 		f.Add(tc)
 	}
 	f.Fuzz(func(t *testing.T, v string) {
-		actual := stream(t, pipereader.New(strings.NewReader(v), hex.Dumper))
-		expected := buffer(t, []byte(v), hex.Dumper)
-
-		assert(t, string(actual), string(expected))
+		actual, err := io.ReadAll(pipereader.New(strings.NewReader(v), hex.Dumper))
+		assertNil(t, err)
+		expected := hex.Dump([]byte(v))
+		assert(t, string(actual), expected)
 	})
 }
 
-func assert(t testing.TB, actual, expected any) {
+func randomData(t testing.TB, n int64) []byte {
 	t.Helper()
-	if actual != expected {
-		t.Errorf("Expected %+v got %+v", expected, actual)
-	}
-}
-
-func stream(t testing.TB, r io.Reader) []byte {
-	t.Helper()
-	data, err := io.ReadAll(r)
-	assert(t, err, nil)
+	data, err := io.ReadAll(io.LimitReader(rand.Reader, n))
+	assertNil(t, err)
 	return data
 }
 
-func buffer[T io.WriteCloser](t testing.TB, data []byte, fn func(w io.Writer) T) []byte {
+func assert[T comparable](t testing.TB, actual, expected T) {
 	t.Helper()
-	var buf bytes.Buffer
-	w := fn(&buf)
+	if actual != expected {
+		t.Fatalf("Expected:\n%+v\nGot:\n%+v", expected, actual)
+	}
+}
 
-	_, err := io.Copy(w, bytes.NewReader(data))
-	assert(t, err, nil)
-	assert(t, w.Close(), nil)
-
-	return buf.Bytes()
+func assertNil(t testing.TB, actual any) {
+	t.Helper()
+	if actual != nil {
+		t.Errorf("Expected %+v got %+v", nil, actual)
+	}
 }
 
 // fakeUpload is a stand-in for a method we cannot change
@@ -65,7 +59,7 @@ func BenchmarkStream(b *testing.B) {
 	r := io.LimitReader(rand.Reader, 1024*1024*10)
 
 	b.Run("stream", func(b *testing.B) {
-		assert(b, fakeUpload(pipereader.New(r, hex.Dumper)), nil)
+		assertNil(b, fakeUpload(pipereader.New(r, hex.Dumper)))
 	})
 
 	b.Run("buffer", func(b *testing.B) {
@@ -73,33 +67,38 @@ func BenchmarkStream(b *testing.B) {
 
 		w := hex.Dumper(&buf)
 		_, err := io.Copy(w, r)
-		assert(b, err, nil)
-		assert(b, w.Close(), nil)
-		assert(b, fakeUpload(&buf), nil)
+		assertNil(b, err)
+		assertNil(b, w.Close())
+		assertNil(b, fakeUpload(&buf))
 	})
 }
 
 func TestDumper(t *testing.T) {
-	data, err := io.ReadAll(io.LimitReader(rand.Reader, 1000))
-	assert(t, err, nil)
-
+	data := randomData(t, 1000)
 	cr := pipereader.New(bytes.NewReader(data), hex.Dumper)
-	actual := stream(t, cr)
-	expected := buffer(t, data, hex.Dumper)
-
-	assert(t, string(actual), string(expected))
+	actual, err := io.ReadAll(cr)
+	assertNil(t, err)
+	assert(t, string(actual), hex.Dump(data))
 }
 
 func TestGzip(t *testing.T) {
 	for _, size := range []int64{1000, 10000, 100000, 1000000} {
 		t.Run(fmt.Sprintf("size-%d", size), func(t *testing.T) {
-			data, err := io.ReadAll(io.LimitReader(rand.Reader, size))
-			assert(t, err, nil)
+			data := randomData(t, size)
 
 			cr := pipereader.New(bytes.NewReader(data), gzip.NewWriter)
 
-			actual := stream(t, cr)
-			expected := buffer(t, data, gzip.NewWriter)
+			actual, err := io.ReadAll(cr)
+			assertNil(t, err)
+
+			var buf bytes.Buffer
+			w := gzip.NewWriter(&buf)
+
+			_, err = io.Copy(w, bytes.NewReader(data))
+			assertNil(t, err)
+			assertNil(t, w.Close())
+
+			expected := buf.Bytes()
 
 			assert(t, hex.EncodeToString(actual), hex.EncodeToString(expected))
 		})
@@ -108,52 +107,46 @@ func TestGzip(t *testing.T) {
 
 var errClosed = errors.New("closed")
 
-type errReader struct {
-	io.Reader
-	count int
-}
-
-func (e *errReader) Read(p []byte) (int, error) {
-	e.count -= 1
-	if e.count < 0 {
-		return 0, errClosed
-	}
-	return e.Reader.Read(p)
-}
-
 func TestErrCloser(t *testing.T) {
-	r := &errReader{Reader: rand.Reader, count: 10}
+	r := io.MultiReader(io.LimitReader(rand.Reader, 10), iotest.ErrReader(errClosed))
 
-	_, err := io.Copy(io.Discard, pipereader.New(r, hex.Dumper))
-	assert(t, err, errClosed)
+	_, err := io.Copy(io.Discard, pipereader.New(r, identity))
+	assert(t, errors.Is(err, errClosed), true)
 }
 
 func TestReader(t *testing.T) {
-	cr := pipereader.New(strings.NewReader("content"), hex.Dumper)
+	data := randomData(t, 1024*16)
 
-	assert(t, iotest.TestReader(cr, []byte(hex.Dump([]byte("content")))), nil)
+	cr := pipereader.New(bytes.NewReader(data), identity)
+
+	assertNil(t, iotest.TestReader(cr, data))
+}
+
+func identity(w io.Writer) io.Writer {
+	return w
 }
 
 func TestHalfReader(t *testing.T) {
-	r := iotest.HalfReader(io.LimitReader(rand.Reader, 1024*1024*10))
+	data := randomData(t, 1024*16)
 
-	cr := pipereader.New(r, bufio.NewWriter)
+	cr := pipereader.New(iotest.HalfReader(bytes.NewReader(data)), identity)
 
-	var buf bytes.Buffer
-
-	_, err := io.Copy(&buf, cr)
-	assert(t, err, nil)
-	assert(t, buf.Len(), 1024*1024*10)
+	actual, err := io.ReadAll(cr)
+	assertNil(t, err)
+	assert(t, len(actual), len(data))
+	assert(t, bytes.Compare(actual, data), 0)
 }
 
 func TestClose(t *testing.T) {
-	r := io.LimitReader(rand.Reader, 1024*1024*10)
+	r := io.LimitReader(rand.Reader, 1024*16)
 
 	cr := pipereader.New(r, hex.Dumper)
-	assert(t, cr.Close(), nil)
+	assertNil(t, cr.Close())
 
 	var buf bytes.Buffer
 
-	_, err := io.Copy(&buf, cr)
+	n, err := io.Copy(&buf, cr)
+	assert(t, err != nil, true)
 	assert(t, err.Error(), "encoding/hex: dumper closed")
+	assert(t, n, 0)
 }
